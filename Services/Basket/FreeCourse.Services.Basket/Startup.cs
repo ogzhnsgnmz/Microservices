@@ -1,6 +1,8 @@
-using FreeCourse.Services.Catalog.Services;
-using FreeCourse.Services.Catalog.Settings;
+using FreeCourse.Services.Basket.Services;
+using FreeCourse.Services.Basket.Settings;
+using FreeCourse.Shared.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
@@ -13,10 +15,11 @@ using Microsoft.Extensions.Options;
 using Microsoft.OpenApi.Models;
 using System;
 using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace FreeCourse.Services.Catalog
+namespace FreeCourse.Services.Basket
 {
     public class Startup
     {
@@ -30,28 +33,40 @@ namespace FreeCourse.Services.Catalog
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            var requireAuthorizePolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
+
+            JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Remove("sub");
+
             services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(opt =>
             {
                 opt.Authority = Configuration["IdentityServerURL"];
-                opt.Audience = "resource_catalog";
+                opt.Audience = "resource_basket";
                 opt.RequireHttpsMetadata = false;
             });
-            services.AddScoped<ICategoryService, CategoryService>();
-            services.AddScoped<ICourseService, CourseService>();
 
-            services.AddAutoMapper(typeof(Startup));
-            services.AddControllers(opt=>
+            services.AddHttpContextAccessor();
+            services.AddScoped<ISharedIdentityService, SharedIdentityService>();
+            services.AddScoped<IBasketService, BasketService>();
+
+            services.Configure<RedisSettings>(Configuration.GetSection("RedisSettings"));
+
+            services.AddSingleton<RedisService>(sp=>
             {
-                opt.Filters.Add(new AuthorizeFilter());
+                var redisSettings = sp.GetRequiredService<IOptions<RedisSettings>>().Value;
+
+                var redis = new RedisService(redisSettings.Host, redisSettings.Port);
+
+                redis.Connect();
+
+                return redis;
             });
-            services.Configure<DatabaseSettings>(Configuration.GetSection("DatabaseSettings"));
-            services.AddSingleton<IDatabaseSettings>(sp =>
-            {
-                return sp.GetRequiredService<IOptions<DatabaseSettings>>().Value;
+
+            services.AddControllers(opt=>{
+                opt.Filters.Add(new AuthorizeFilter(requireAuthorizePolicy));
             });
             services.AddSwaggerGen(c =>
             {
-                c.SwaggerDoc("v1", new OpenApiInfo { Title = "FreeCourse.Services.Catalog", Version = "v1" });
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "FreeCourse.Services.Basket", Version = "v1" });
             });
         }
 
@@ -62,10 +77,11 @@ namespace FreeCourse.Services.Catalog
             {
                 app.UseDeveloperExceptionPage();
                 app.UseSwagger();
-                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "FreeCourse.Services.Catalog v1"));
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "FreeCourse.Services.Basket v1"));
             }
 
             app.UseRouting();
+
             app.UseAuthentication();
             app.UseAuthorization();
 
